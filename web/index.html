@@ -35,7 +35,7 @@
   #cover p{color:#88a8c8;font-size:13px;margin:0;letter-spacing:.1em}
   #cover .play{border:1px solid var(--acc);color:var(--acc);padding:14px 34px;border-radius:40px;
     font-size:14px;letter-spacing:.2em}
-  .hint{position:fixed;right:26px;bottom:26px;font-size:11px;color:#54708c;letter-spacing:.08em}
+  .hint{position:fixed;right:26px;bottom:78px;font-size:11px;color:#54708c;letter-spacing:.08em}
 </style>
 </head>
 <body>
@@ -240,25 +240,23 @@ function drawRobot(t){
   const scale = H/(2*Math.tan(cam.fov*Math.PI/360));
 
   ctx.lineCap = "round";
+  ctx.save();
+  ctx.shadowColor = "rgba(94,231,255,0.55)";
+  ctx.shadowBlur = 0.028*scale;
   for (const it of items){
     const near = 1-(it.z-zmin)/(zmax-zmin+1e-6);
     const w0 = 2*it.r0*scale/it.z, w1 = 2*it.r1*scale/it.z;
-    const w = (w0+w1)/2;
+    const w = (w0+w1)/2 * 0.92;
     const col = mix([167,139,250],[94,231,255], 0.35+0.65*near);
     const sh = 0.55+0.45*near;
-    // glow
-    ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},0.16)`;
-    ctx.lineWidth = w*2.1;
-    ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
-    // body
     ctx.strokeStyle = `rgb(${col.map(v=>Math.round(v*sh)).join(",")})`;
     ctx.lineWidth = Math.max(2,w);
     ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
-    // rim
-    ctx.strokeStyle = "rgba(255,255,255,0.10)";
-    ctx.lineWidth = Math.max(1,w*0.22);
+    ctx.strokeStyle = "rgba(255,255,255,0.12)";
+    ctx.lineWidth = Math.max(1,w*0.20);
     ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
   }
+  ctx.restore();
 
   // torso plate
   const pv=proj.pelvis, ch=proj.chest;
@@ -298,10 +296,10 @@ function roundRect(c,x,y,w,h,r){
 function mix(a,b,t){ return a.map((v,i)=>v+(b[i]-v)*t); }
 
 // ---- loop -----------------------------------------------------------------------
-let playing=false, started=false;
+let playing=false, started=false, fallback=false, t0=0;
 function tick(){
   requestAnimationFrame(tick);
-  const t = audio.currentTime || 0;
+  const t = (!fallback && audio.currentTime) ? audio.currentTime : (started ? (performance.now()-t0)/1000 : 0);
   if (!started) return;
   const bi = beatAt(t);
   const s = segAt(t);
@@ -323,14 +321,20 @@ function start(){
   started = true;
   cover.style.display="none";
   audio.currentTime = 0;
-  audio.play().catch(()=>{});
+  t0 = performance.now();
+  audio.play().catch(()=>{ fallback = true; });   // 静音预览：没有声音也继续播画面
   playing = true;
   document.getElementById("pause").textContent = "暂停";
+}
+// 允许 ?autoplay 或 #play 直接开演（方便嵌入 / 录屏 / 截图）
+if (location.search.includes("autoplay") || location.hash === "#play") {
+  setTimeout(start, 200);
 }
 cover.addEventListener("click", start);
 document.getElementById("pause").onclick = () => {
   playing = !playing;
-  if (playing) audio.play().catch(()=>{}); else audio.pause();
+  if (playing) { if (!fallback) audio.play().catch(()=>{ fallback = true; }); t0 = performance.now(); }
+  else { audio.pause(); }
   document.getElementById("pause").textContent = playing ? "暂停" : "播放";
 };
 document.getElementById("cam").onclick = () => {
