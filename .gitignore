@@ -11,3 +11,11 @@ dist/servo_table.csv
 dist/choreo.json
 dist/choreo.csv
 dist/servo_config.json
+
+# Word / Office 打开文档时生成的锁文件
+~$*
+.~*
+
+# 系统与工具
+*.swp
+.DS_Store
