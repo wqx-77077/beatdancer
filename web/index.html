@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BeatDancer · 音乐驱动的机器人即兴编舞</title>
+<style>
+  :root{--acc:#5ee7ff;--acc2:#a78bfa;--bg:#080b12}
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:#e8f2ff;
+    font-family:-apple-system,"PingFang SC","Hiragino Sans GB",system-ui,sans-serif;overflow:hidden}
+  #stage{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .hud{position:fixed;left:26px;top:22px;pointer-events:none}
+  .title{font-size:22px;letter-spacing:.22em;font-weight:600}
+  .sub{font-size:12px;color:#8fb3d9;margin-top:4px;letter-spacing:.08em}
+  .right{position:fixed;right:26px;top:22px;text-align:right;pointer-events:none}
+  .bpm{font-size:26px;font-weight:600;color:var(--acc);font-variant-numeric:tabular-nums}
+  .sect{font-size:12px;color:var(--acc2);letter-spacing:.2em;margin-top:2px}
+  .beats{display:flex;gap:7px;justify-content:flex-end;margin-top:10px}
+  .beats i{width:7px;height:7px;border-radius:50%;background:#2b3d55;display:block;transition:.08s}
+  .beats i.on{background:var(--acc);box-shadow:0 0 10px var(--acc)}
+  .bottom{position:fixed;left:26px;right:26px;bottom:22px;display:flex;align-items:center;gap:16px}
+  .chip{border:1px solid rgba(120,200,240,.35);background:rgba(255,255,255,.04);
+    border-radius:10px;padding:9px 14px;font-size:13px;color:#cfe8ff;backdrop-filter:blur(6px);white-space:nowrap}
+  .chip b{color:var(--acc);font-weight:600}
+  .bar{flex:1;height:3px;background:#1b2838;border-radius:3px;position:relative;overflow:hidden}
+  .bar>i{position:absolute;left:0;top:0;bottom:0;width:0;background:linear-gradient(90deg,var(--acc),var(--acc2))}
+  .ctrl{display:flex;gap:10px}
+  button{background:rgba(255,255,255,.05);color:#dcecff;border:1px solid rgba(120,200,240,.3);
+    border-radius:10px;padding:9px 14px;font-size:13px;cursor:pointer;transition:.15s}
+  button:hover{background:rgba(94,231,255,.14);border-color:var(--acc)}
+  #cover{position:fixed;inset:0;background:radial-gradient(ellipse at 50% 40%,#101a2b,#05070c 70%);
+    display:flex;align-items:center;justify-content:center;flex-direction:column;gap:18px;z-index:9;cursor:pointer}
+  #cover h1{font-size:30px;letter-spacing:.3em;margin:0;font-weight:600}
+  #cover p{color:#88a8c8;font-size:13px;margin:0;letter-spacing:.1em}
+  #cover .play{border:1px solid var(--acc);color:var(--acc);padding:14px 34px;border-radius:40px;
+    font-size:14px;letter-spacing:.2em}
+  .hint{position:fixed;right:26px;bottom:26px;font-size:11px;color:#54708c;letter-spacing:.08em}
+</style>
+</head>
+<body>
+<canvas id="stage"></canvas>
+<div class="hud">
+  <div class="title">BEATDANCER</div>
+  <div class="sub">音乐驱动的机器人即兴编舞 · RDK X5</div>
+</div>
+<div class="right">
+  <div class="bpm" id="bpm">-- BPM</div>
+  <div class="sect" id="sect">READY</div>
+  <div class="beats" id="beats"><i></i><i></i><i></i><i></i></div>
+</div>
+<div class="bottom">
+  <div class="chip">动作 · <b id="move">待机</b></div>
+  <div class="bar"><i id="prog"></i></div>
+  <button id="cam">切换机位</button>
+  <button id="pause">暂停</button>
+</div>
+<div class="hint">空格 暂停 · C 切机位 · 点击画面重播</div>
+<div id="cover">
+  <h1>BEATDANCER</h1>
+  <p>给机器人一副耳朵，它自己会编舞</p>
+  <div class="play">点击开始</div>
+</div>
+<audio id="audio" preload="auto" src="data:audio/wav;base64,__AUDIO__"></audio>
+<script>window.CHOREO = __CHOREO__;</script>
+<script>
+(() => {
+"use strict";
+const C = window.CHOREO;
+const JOINTS = C.joints;                       // 16 names, same order as Python
+const IDX = Object.fromEntries(JOINTS.map((n, i) => [n, i]));
+const BONE = {pelvis_z:0.215, hip_dx:0.052, thigh:0.115, shin:0.110, foot:0.052,
+  torso:0.150, neck:0.052, head:0.046, shoulder_dx:0.082, shoulder_z:0.130,
+  upper_arm:0.105, forearm:0.098};
+const BONES = [
+ ["pelvis","chest",.052,.046],["chest","neck",.030,.026],["neck","head",.030,.040],
+ ["chest","shoulder_L",.028,.024],["shoulder_L","elbow_L",.024,.020],["elbow_L","wrist_L",.020,.015],
+ ["chest","shoulder_R",.028,.024],["shoulder_R","elbow_R",.024,.020],["elbow_R","wrist_R",.020,.015],
+ ["pelvis","hip_L",.040,.034],["hip_L","knee_L",.034,.026],["knee_L","ankle_L",.026,.020],["ankle_L","toe_L",.020,.014],
+ ["pelvis","hip_R",.040,.034],["hip_R","knee_R",.034,.026],["knee_R","ankle_R",.026,.020],["ankle_R","toe_R",.020,.014]];
+
+// ---- tiny vector / matrix helpers -------------------------------------------------
+const add=(a,b)=>[a[0]+b[0],a[1]+b[1],a[2]+b[2]];
+const mul=(a,s)=>[a[0]*s,a[1]*s,a[2]*s];
+const rotX=a=>{const c=Math.cos(a),s=Math.sin(a);return [[1,0,0],[0,c,-s],[0,s,c]];};
+const rotY=a=>{const c=Math.cos(a),s=Math.sin(a);return [[c,0,s],[0,1,0],[-s,0,c]];};
+const rotZ=a=>{const c=Math.cos(a),s=Math.sin(a);return [[c,-s,0],[s,c,0],[0,0,1]];};
+const mm=(A,B)=>A.map((r,i)=>[0,1,2].map(j=>r[0]*B[0][j]+r[1]*B[1][j]+r[2]*B[2][j]));
+const mv=(M,v)=>[M[0][0]*v[0]+M[0][1]*v[1]+M[0][2]*v[2],
+                 M[1][0]*v[0]+M[1][1]*v[1]+M[1][2]*v[2],
+                 M[2][0]*v[0]+M[2][1]*v[1]+M[2][2]*v[2]];
+
+function fk(q, root, yaw){
+  const Rz = rotZ(q[IDX.waist_yaw]+yaw);
+  const pelvis = add(root,[0,0,BONE.pelvis_z]);
+  const chest = add(pelvis, mv(Rz,[0,0,BONE.torso]));
+  const neck  = add(chest,  mv(Rz,[0,0,BONE.neck]));
+  const head  = add(neck,   mv(Rz,[0,0,BONE.head]));
+  const P = {pelvis, chest, neck, head};
+  for (const [side,sx] of [["L",1],["R",-1]]){
+    const sh = add(chest, mv(Rz,[sx*BONE.shoulder_dx,0,BONE.shoulder_z]));
+    const Ra = mm(Rz, mm(rotY(-sx*q[IDX["shoulder_roll_"+side]]), rotX(q[IDX["shoulder_pitch_"+side]])));
+    const el = add(sh, mul(mv(Ra,[0,0,-1]), BONE.upper_arm));
+    const Rf = mm(Ra, rotX(q[IDX["elbow_"+side]]));
+    const wr = add(el, mul(mv(Rf,[0,0,-1]), BONE.forearm));
+    P["shoulder_"+side]=sh; P["elbow_"+side]=el; P["wrist_"+side]=wr;
+  }
+  for (const [side,sx] of [["L",1],["R",-1]]){
+    const hip = add(pelvis,[sx*BONE.hip_dx,0,0]);
+    const Rt = mm(Rz, mm(rotY(sx*q[IDX["hip_roll_"+side]]), rotX(q[IDX["hip_pitch_"+side]])));
+    const kn = add(hip, mul(mv(Rt,[0,0,-1]), BONE.thigh));
+    const Rs = mm(Rt, rotX(q[IDX["knee_"+side]]));
+    const an = add(kn, mul(mv(Rs,[0,0,-1]), BONE.shin));
+    const Rft = mm(Rs, rotX(q[IDX["ankle_"+side]]));
+    let d = mv(Rft,[0,1,-0.18]); const L = Math.hypot(...d)||1; d = mul(d,1/L);
+    P["hip_"+side]=hip; P["knee_"+side]=kn; P["ankle_"+side]=an; P["toe_"+side]=add(an, mul(d, BONE.foot*1.35));
+  }
+  return P;
+}
+
+// ---- camera ---------------------------------------------------------------------
+const CAMS = [
+  {name:"front",  pos:[0.80, 1.06, 0.60], target:[0,0,0.265], fov:40},
+  {name:"side",   pos:[1.35, 0.18, 0.58], target:[0,0,0.265], fov:38},
+  {name:"low",    pos:[0.55, 0.95, 0.22], target:[0,0,0.30],  fov:46},
+];
+let camIdx = 0, cam = CAMS[0];
+
+function project(pts, W, H){
+  const p0 = cam.pos, t = cam.target;
+  let fwd = [t[0]-p0[0], t[1]-p0[1], t[2]-p0[2]];
+  const fl = Math.hypot(...fwd); fwd = mul(fwd, 1/fl);
+  let right = [fwd[1], -fwd[0], 0];                 // cross(fwd, up=[0,0,1])
+  const rl = Math.hypot(...right)||1; right = mul(right,1/rl);
+  const up = [right[1]*fwd[2]-right[2]*fwd[1], right[2]*fwd[0]-right[0]*fwd[2], right[0]*fwd[1]-right[1]*fwd[0]];
+  const f = 1/Math.tan(cam.fov*Math.PI/360);
+  const aspect = W/H;
+  return pts.map(p=>{
+    const rel=[p[0]-p0[0],p[1]-p0[1],p[2]-p0[2]];
+    const z = rel[0]*fwd[0]+rel[1]*fwd[1]+rel[2]*fwd[2];
+    const x = rel[0]*right[0]+rel[1]*right[1]+rel[2]*right[2];
+    const y = rel[0]*up[0]+rel[1]*up[1]+rel[2]*up[2];
+    const zz = Math.max(z, 1e-3);
+    return [ (x*f/zz/aspect*0.5+0.5)*W, (0.5-y*f/zz*0.5)*H, zz ];
+  });
+}
+
+// ---- player ---------------------------------------------------------------------
+const canvas = document.getElementById("stage");
+const ctx = canvas.getContext("2d");
+const audio = document.getElementById("audio");
+const cover = document.getElementById("cover");
+const elBpm = document.getElementById("bpm"), elSect = document.getElementById("sect");
+const elMove = document.getElementById("move"), elProg = document.getElementById("prog");
+const dots = [...document.querySelectorAll(".beats i")];
+const segs = C.segments, beats = C.beats, sections = C.sections;
+let dpr = Math.min(devicePixelRatio||1, 2), W=0, H=0;
+
+function resize(){
+  W = innerWidth; H = innerHeight;
+  canvas.width = W*dpr; canvas.height = H*dpr;
+  canvas.style.width = W+"px"; canvas.style.height = H+"px";
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+addEventListener("resize", resize); resize();
+
+elBpm.textContent = C.meta.bpm.toFixed(1)+" BPM";
+
+function frameAt(t){
+  const i = Math.max(0, Math.min(C.times.length-1, Math.round(t*C.meta.fps)));
+  return i;
+}
+function segAt(t){
+  let s = segs[0];
+  for (const g of segs){ if (t >= g.t0) s = g; else break; }
+  return s;
+}
+function beatAt(t){
+  let lo=0, hi=beats.length-1, r=0;
+  while(lo<=hi){ const m=(lo+hi)>>1; if(beats[m]<=t){r=m;lo=m+1;} else hi=m-1; }
+  return r;
+}
+
+function drawFloor(t, energy){
+  const o = project([[0,0,0]], W, H)[0];
+  const cx=o[0], cy=o[1];
+  for(let i=0;i<7;i++){
+    const rr = (70+i*26);
+    const a = Math.max(0,(0.05-i*0.006)*(0.6+0.9*energy));
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rr*1.55, rr*0.30, 0, 0, Math.PI*2);
+    ctx.fillStyle = `rgba(60,110,190,${a})`;
+    ctx.fill();
+  }
+  // perspective grid
+  ctx.lineWidth = 1;
+  for(let k=-4;k<=4;k++){
+    const x=k*0.16;
+    const p = project([[x,-0.55,0],[x,0.55,0]], W, H);
+    ctx.strokeStyle=`rgba(90,120,170,${0.10+0.06*energy})`;
+    ctx.beginPath(); ctx.moveTo(p[0][0],p[0][1]); ctx.lineTo(p[1][0],p[1][1]); ctx.stroke();
+  }
+  for(let k=-3;k<=3;k++){
+    const y=k*0.18;
+    const p = project([[-0.65,y,0],[0.65,y,0]], W, H);
+    ctx.strokeStyle=`rgba(90,120,170,${0.08+0.05*energy})`;
+    ctx.beginPath(); ctx.moveTo(p[0][0],p[0][1]); ctx.lineTo(p[1][0],p[1][1]); ctx.stroke();
+  }
+  // kick ring
+  const bi = beatAt(t), bp = bpAt(t, bi);
+  if (bp >= 0 && bp < 1){
+    const rr = (30+130*bp);
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rr*1.55, rr*0.30, 0, 0, Math.PI*2);
+    ctx.strokeStyle = `rgba(120,220,255,${0.5*(1-bp)*(0.4+energy)})`;
+    ctx.lineWidth = 2; ctx.stroke();
+  }
+}
+function bpAt(t, bi){
+  const t0 = beats[bi];
+  const t1 = bi+1 < beats.length ? beats[bi+1] : t0 + (beats[bi]-beats[bi-1]||0.5);
+  return Math.max(0, Math.min(1,(t-t0)/Math.max(1e-3,t1-t0)));
+}
+
+function drawRobot(t){
+  const fi = frameAt(t);
+  const q = C.q[Math.min(fi, C.q.length-1)];
+  const r = C.root[Math.min(fi, C.root.length-1)];
+  const P = fk(q, [r[0],r[1],r[2]], r[3]);
+  const names = Object.keys(P);
+  const proj = {};
+  names.forEach(n=>{ proj[n] = project([P[n]], W, H)[0]; });
+
+  const items = BONES.map(([a,b,r0,r1])=>{
+    const pa = proj[a], pb = proj[b];
+    return {a,b,r0,r1,z:(pa[2]+pb[2])/2,pa,pb};
+  }).sort((x,y)=>y.z-x.z);
+
+  const zs = items.map(i=>i.z), zmin=Math.min(...zs), zmax=Math.max(...zs);
+  const scale = H/(2*Math.tan(cam.fov*Math.PI/360));
+
+  ctx.lineCap = "round";
+  for (const it of items){
+    const near = 1-(it.z-zmin)/(zmax-zmin+1e-6);
+    const w0 = 2*it.r0*scale/it.z, w1 = 2*it.r1*scale/it.z;
+    const w = (w0+w1)/2;
+    const col = mix([167,139,250],[94,231,255], 0.35+0.65*near);
+    const sh = 0.55+0.45*near;
+    // glow
+    ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},0.16)`;
+    ctx.lineWidth = w*2.1;
+    ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
+    // body
+    ctx.strokeStyle = `rgb(${col.map(v=>Math.round(v*sh)).join(",")})`;
+    ctx.lineWidth = Math.max(2,w);
+    ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
+    // rim
+    ctx.strokeStyle = "rgba(255,255,255,0.10)";
+    ctx.lineWidth = Math.max(1,w*0.22);
+    ctx.beginPath(); ctx.moveTo(it.pa[0],it.pa[1]); ctx.lineTo(it.pb[0],it.pb[1]); ctx.stroke();
+  }
+
+  // torso plate
+  const pv=proj.pelvis, ch=proj.chest;
+  const wa=0.049*scale/pv[2], wb=0.064*scale/ch[2];
+  const dx=ch[0]-pv[0], dy=ch[1]-pv[1], L=Math.hypot(dx,dy)||1;
+  const nx=-dy/L, ny=dx/L;
+  ctx.beginPath();
+  ctx.moveTo(pv[0]+nx*wa, pv[1]+ny*wa);
+  ctx.lineTo(ch[0]+nx*wb, ch[1]+ny*wb);
+  ctx.lineTo(ch[0]-nx*wb, ch[1]-ny*wb);
+  ctx.lineTo(pv[0]-nx*wa, pv[1]-ny*wa);
+  ctx.closePath();
+  ctx.fillStyle="rgba(16,24,40,0.92)"; ctx.fill();
+  ctx.strokeStyle="rgba(94,231,255,0.42)"; ctx.lineWidth=1.2; ctx.stroke();
+  const mx=(pv[0]+ch[0])/2, my=(pv[1]+ch[1])/2, cr=0.016*scale/ch[2];
+  ctx.strokeStyle="rgba(94,231,255,0.95)"; ctx.lineWidth=Math.max(2,cr*0.7);
+  ctx.beginPath(); ctx.moveTo(mx-cr,my); ctx.lineTo(mx+cr,my); ctx.stroke();
+
+  // head
+  const hd = proj.head, hr = 0.050*scale/hd[2];
+  const g = ctx.createRadialGradient(hd[0]-hr*0.3,hd[1]-hr*0.3,hr*0.2,hd[0],hd[1],hr);
+  g.addColorStop(0,"#a9f2ff"); g.addColorStop(1,"#4fb6e8");
+  ctx.beginPath(); ctx.arc(hd[0],hd[1],hr,0,Math.PI*2); ctx.fillStyle=g; ctx.fill();
+  ctx.strokeStyle="rgba(255,255,255,0.35)"; ctx.lineWidth=1; ctx.stroke();
+  ctx.beginPath();
+  roundRect(ctx, hd[0]-hr*0.66, hd[1]-hr*0.26, hr*1.32, hr*0.46, hr*0.16);
+  ctx.fillStyle="rgba(9,14,26,0.95)"; ctx.fill();
+  const gl = 0.5+0.5*Math.sin(t*6);
+  ctx.fillStyle=`rgba(170,246,255,${0.55+0.4*gl})`;
+  ctx.beginPath(); ctx.arc(hd[0]-hr*0.30, hd[1]-hr*0.03, hr*0.10, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(hd[0]+hr*0.30, hd[1]-hr*0.03, hr*0.10, 0, Math.PI*2); ctx.fill();
+}
+function roundRect(c,x,y,w,h,r){
+  c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); c.closePath();
+}
+function mix(a,b,t){ return a.map((v,i)=>v+(b[i]-v)*t); }
+
+// ---- loop -----------------------------------------------------------------------
+let playing=false, started=false;
+function tick(){
+  requestAnimationFrame(tick);
+  const t = audio.currentTime || 0;
+  if (!started) return;
+  const bi = beatAt(t);
+  const s = segAt(t);
+  const en = (C.meta && C.meta.bpm) ? 0.55 : 0.5;
+
+  ctx.fillStyle = "#080b12";
+  ctx.fillRect(0,0,W,H);
+  drawFloor(t, en);
+  drawRobot(t);
+
+  elProg.style.width = (100*t/C.meta.duration).toFixed(2)+"%";
+  elMove.textContent = s ? s.zh : "待机";
+  elSect.textContent = (s ? s.section : "main").toUpperCase();
+  dots.forEach((d,i)=>d.classList.toggle("on", i === (bi % 4)));
+}
+tick();
+
+function start(){
+  started = true;
+  cover.style.display="none";
+  audio.currentTime = 0;
+  audio.play().catch(()=>{});
+  playing = true;
+  document.getElementById("pause").textContent = "暂停";
+}
+cover.addEventListener("click", start);
+document.getElementById("pause").onclick = () => {
+  playing = !playing;
+  if (playing) audio.play().catch(()=>{}); else audio.pause();
+  document.getElementById("pause").textContent = playing ? "暂停" : "播放";
+};
+document.getElementById("cam").onclick = () => {
+  camIdx = (camIdx+1)%CAMS.length; cam = CAMS[camIdx];
+};
+addEventListener("keydown", e=>{
+  if (e.code === "Space"){ e.preventDefault(); document.getElementById("pause").click(); }
+  if (e.key === "c" || e.key === "C") document.getElementById("cam").click();
+});
+canvas.addEventListener("click", ()=>{ if(started) audio.currentTime = 0; });
+audio.addEventListener("ended", ()=>{ audio.currentTime = 0; audio.play().catch(()=>{}); });
+})();
+</script>
+</body>
+</html>

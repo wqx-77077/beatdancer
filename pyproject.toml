@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "beatdancer"
+version = "0.1.0"
+description = "Music-driven choreography for a 16-DOF servo humanoid (RDK X5 hackathon project)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+dependencies = ["numpy>=1.20", "pillow>=8.4"]
+
+[project.scripts]
+beatdancer = "beatdancer.cli:main"
+
+[tool.setuptools]
+packages = ["beatdancer"]

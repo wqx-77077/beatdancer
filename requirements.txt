@@ -1,0 +1,6 @@
+numpy>=1.20
+pillow>=8.4
+# optional, only for the board
+# pyserial>=3.5
+# optional, only for the G1 simulation
+# mujoco>=3.1

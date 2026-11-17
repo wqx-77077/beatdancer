@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/_frames/
+.DS_Store
+
+# 可再生的中间产物（demo 视频和网页保留，方便评委直接看）
+dist/*.bvh
+dist/g1_qpos.csv
+dist/servo_table.csv
+dist/choreo.json
+dist/choreo.csv
+dist/servo_config.json
